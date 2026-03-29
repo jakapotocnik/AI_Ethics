@@ -1,5 +1,4 @@
-# AI_Ethics
-Submission for COMP41820. Team code F.
+# AI_Ethics: Submission for COMP41820. Team code F.
 
 
 The main file to look at is **VioletZ3-Validation.py** - this contains the Z3 version of the CTL encoded goals for the Robot.
