@@ -1,19 +1,22 @@
 import z3
 from z3 import *
 import numpy as np
-import skfuzzy as fuzz
-from skfuzzy import control as ctrl
-#
-distance = ctrl.Antecedent(np.arange(0, 11, 0.1), 'distance')
-smile = ctrl.Antecedent(np.arange(0, 2, 1), 'smile')       # 0 or 1
-uv = ctrl.Antecedent(np.arange(0, 2, 1), 'uv')             # 0 or 1
 
+# TEAM F - Z3 Validation of Disinfection Robot, PWB and JP
 
-NUM_TIMESLOTS = 50
-NUM_ROOMS=2
-NUM_ROBOTS=2
-QUEUE_SIZE=6
+NUM_TIMESLOTS = 50 #Number of timeslots to test
+NUM_ROOMS=2 # Number of rooms to model
+NUM_ROBOTS=2 # Number of robots to model
+QUEUE_SIZE=6 # Number of patients/workload in the queue - keep small to min timeslots
+BATT_USE_CLEANING = 16 # How much battery is used cleaning
+BATT_USE_DOORWAY = 4 # How much battery is used going through a door carefully
+BATT_CHARGE_INCREMENT = 8 #  How much battery charged is added during charging
+BATT_MOVING = 6 #  How much battery is used moving to rooms or to the charged
+BATT_MIN_FOR_DOOR = 25 #  Minimum battery to be allow go through door
+BATT_CRITICAL = 10 #  HALT battery level
+BATT_LOW = 20 # mandatory recharge level
 
+# Initialise all the variables for each timeslot.
 battery = [[Real(f"battery_{robot}_{t}") for t in range(NUM_TIMESLOTS)] for robot in range(NUM_ROBOTS)]
 queue = [Int(f"queue_{t}") for t in range(NUM_TIMESLOTS)]
 human_detected = [[Bool(f"human_{robot}_{t}") for t in range(NUM_TIMESLOTS)] for robot in range(NUM_ROBOTS)]
@@ -42,9 +45,16 @@ room_cleaned = [[Bool(f"room_cleaned_{room}_{t}") for t in range(NUM_TIMESLOTS)]
 
 
 def build_solver(add_violations=False,functional_goals=True,force_one_stop=False):
+    '''
+    Method to build a z3 solver for the robot.
+    :param add_violations: Flag to enable the violation search. Should return unsat if enabled.
+    :param functional_goals: Enable the end goals, queue=0, rooms all clean.
+    :param force_one_stop: Force an emergency stop in the simulation - 5 TIME SLOTS FROM END
+    :return: the solver object.
+    '''
     s = Solver()
 
-    # initialise robots to charging
+    # initialise robots and rooms
     for robot in range(NUM_ROBOTS):
         s.add(battery[robot][0] == 100)
         s.add(human_detected[robot][0] == False)
@@ -71,8 +81,6 @@ def build_solver(add_violations=False,functional_goals=True,force_one_stop=False
     # init the patient queue
     s.add(queue[0] == QUEUE_SIZE)
 
-
-    # simulate at least one stop
     # s.add(emergency_stop[0][T -5] == True)
     # set up the time transitions
     for t in range(NUM_TIMESLOTS-1):
@@ -82,17 +90,15 @@ def build_solver(add_violations=False,functional_goals=True,force_one_stop=False
 
 
         for room in range(NUM_ROOMS):
-            # if room was just used make it dirty (the room would have been clean if in use)
+            # if room was just used make it dirty
             s.add(Implies(room_used[room][t], Not(room_cleaned[room][t + 1])))
             # if room just cleaned use it.
-            # s.add(room_used[room][t] == room_cleaned[room][t])
             s.add(room_used[room][t] == If(queue[t]>0,room_cleaned[room][t], False))
             # is any robot in the room with uv_on?
             any_robot_uv_this_room = Or([uv_on[room][robot][t] for robot in range(NUM_ROBOTS)])
             # if and only if there was then mark room as cleaned. If it was previous clean keep it that way.$$
-            # s.add(Or((any_robot_uv_this_room == room_cleaned[room][t + 1]))) #,
-                   # (room_cleaned[room][t] == room_cleaned[room][t + 1])))
             s.add(room_cleaned[room][t + 1] == Or(any_robot_uv_this_room, And(Not(room_used[room][t]), room_cleaned[room][t])))
+        # global to see if all rooms not in use are clean
         all_unused_clean = And([And(room_cleaned[room][t], Not(room_used[room][t])) for room in range(NUM_ROOMS)])
         for robot in range(NUM_ROBOTS):
             if force_one_stop and t == NUM_TIMESLOTS - 5:
@@ -107,70 +113,73 @@ def build_solver(add_violations=False,functional_goals=True,force_one_stop=False
             in_any_room = Or([in_room[room][robot][t] for room in range(NUM_ROOMS)]) # the robot is in a room
             to_any_room = Or([to_room[room][robot][t] for room in range(NUM_ROOMS)]) # the robot is on the way to a room
             # the robot is going in/out of room
+            # in any IN doorway
             in_any_doorway = Or([in_doorway[room][robot][t] for room in range(NUM_ROOMS)])
+            # in any OUT doorway
             out_any_doorway = Or([out_doorway[room][robot][t] for room in range(NUM_ROOMS)])
-            all_clean =  And([room_cleaned[room][t] for room in range(NUM_ROOMS)])
-            # battery consumption
+
+            # battery consumption - capture the change to the previous level based on activity
             s.add(
                 battery[robot][t+1] == battery[robot][t]
                                     # normal move
-                                    - If(Or(to_charge[robot][t],to_any_room), 6, 0)
+                                    - If(Or(to_charge[robot][t],to_any_room), BATT_MOVING, 0)
                                     # uv light uses more power
-                                    - If(cleaning_any_room, 16, 0) # 16
+                                    - If(cleaning_any_room, BATT_USE_CLEANING, 0) # 16
                                     # manoeuvring through doorway
-                                    - If(in_any_doorway, 4, 0)
-                                    - If(out_any_doorway, 4, 0)
+                                    - If(in_any_doorway, BATT_USE_DOORWAY, 0)
+                                    - If(out_any_doorway, BATT_USE_DOORWAY, 0)
                                     # charging adds 8 unless it needs less.
-                                    + If(charging[robot][t], If(battery[robot][t] <= 92, 8, 100 - battery[robot][t]), 0)
-                                    # + If(And(charging[robot][t], battery[robot][t] <= 92), 8, 100- battery[robot][t])
+                                    + If(charging[robot][t], If(battery[robot][t] <= 100 - BATT_CHARGE_INCREMENT, BATT_CHARGE_INCREMENT, 100 - battery[robot][t]), 0)
             )
             s.add(battery[robot][t] >= 0)
             s.add(battery[robot][t] <= 100)
 
-            min_batt_for_door=10
+
             # don't go through a doorway on < x% battery in case of blockage
-            # s.add(Implies(Or(in_any_doorway,out_any_doorway),battery[robot][t]>=min_batt_for_door))
-            s.add(Implies(battery[robot][t] < min_batt_for_door, Not(to_any_room)))
-            s.add(Implies(Or(in_any_doorway, out_any_doorway), battery[robot][t] >= min_batt_for_door))
+            s.add(Implies(battery[robot][t] < BATT_MIN_FOR_DOOR, Not(to_any_room)))
+            s.add(Implies(Or(in_any_doorway, out_any_doorway), battery[robot][t] >= BATT_MIN_FOR_DOOR))
             s.add(Implies(
-                And(in_any_room, battery[robot][t] < min_batt_for_door),
+                And(in_any_room, battery[robot][t] < BATT_MIN_FOR_DOOR),
                 And(halted[robot][t + 1] , Not(in_any_room))
             ))
 
 
             # can only go to charging if previous was to_charge or already charging if not fully charged
-            s.add(charging[robot][t+1] == Or( to_charge[robot][t], If(And(charging[robot][t], battery[robot][t] < 97), True, False)))
-            # room specific
+            s.add(charging[robot][t+1] == Or( to_charge[robot][t], If(And(charging[robot][t], battery[robot][t] <= 97), True, False)))
+
+            # robot can only be sent to one room
             s.add(AtMost(*[to_room[room][robot][t] for room in range(NUM_ROOMS)], 1))
 
             for room in range(NUM_ROOMS):
+                # if in a room it should be cleaning
                 s.add(cleaning[room][robot][t] == in_room[room][robot][t])
+                # uv_on if and only if cleaning
                 s.add(And(Implies(uv_on[room][robot][t], cleaning[room][robot][t]),
                           Implies(cleaning[room][robot][t], uv_on[room][robot][t])))
                 # only go to dirty rooms
                 s.add(Implies(to_room[room][robot][t], Not(room_cleaned[room][t])))
-                # go to the indoorway
+                # go to the room through the in doorway
                 s.add(in_doorway[room][robot][t+1] == to_room[room][robot][t])
-                # go into room from in doorway
+                # go into room from in doorway # stage is to enable checking if we should go through door
                 s.add(in_room[room][robot][t + 1] == in_doorway[room][robot][t])
                 # when the room is cleaned and this robot was in the room - go out
                 s.add(out_doorway[room][robot][t + 1] == And(cleaning[room][robot][t],in_room[room][robot][t]))
 
             # Smile inside rooms
-            # s.add(And(pause_and_smile[robot][t],moving[robot][t]))
             s.add(pause_and_smile[robot][t]== human_detected[robot][t])
 
             # human detection stop clean/UV
-            # s.add(human_detected[t]!=uv_on[t])
             s.add(Implies(human_detected[robot][t],And( Not(uv_on_any_room),Not(cleaning_any_room),Not(moving[robot][t]))))
             # emergency stop
             s.add(Implies(emergency_stop[robot][t],And(Not(uv_on_any_room),Not(cleaning_any_room),Not(moving[robot][t]))))
             # halt if emerg stop, previously halted or battery too low.
 
+            # if button pressed go to emergency stop stage
             s.add(emergency_stop[robot][t + 1] == Or(emergency_stop[robot][t],emergency_button[robot][t] ))
-            s.add(halted[robot][t + 1] == Or(halted[robot][t], battery[robot][t] < 20))
+            # if battery critical HALT
+            s.add(halted[robot][t + 1] == Or(halted[robot][t], battery[robot][t] < BATT_CRITICAL))
 
-            # moving if to_*
+            # moving if to_room or to_charge
             s.add(moving[robot][t]==Or(to_any_room,to_charge[robot][t]))
 
             # states are 1 and only 1
@@ -179,12 +188,12 @@ def build_solver(add_violations=False,functional_goals=True,force_one_stop=False
 
             #  robot cannot move while cleaning
             s.add(Implies(cleaning_any_room, Not(moving[robot][t])))
-
-            s.add(Implies(And(all_unused_clean, battery[robot][t] < 80),
+            # if all the rooms are clean go charge if needed
+            s.add(Implies(And(all_unused_clean, battery[robot][t] < 100),
                           to_charge[robot][t]))
             # low battery go charge
-            s.add(Implies( Or(battery[robot][t] < 20),    to_charge[robot][t] ))
-            # s.add(Implies(to_charge[robot][t], Or( battery[robot][t] < 30)))
+            s.add(Implies( Or(battery[robot][t] < BATT_LOW),    to_charge[robot][t] ))
+
     #  patient queue drained at end
 
     if functional_goals:
