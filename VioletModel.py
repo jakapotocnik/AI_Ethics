@@ -6,6 +6,9 @@ import matplotlib
 matplotlib.use("TkAgg")
 import random
 
+
+# TEAM F - Prototype model. This is not the Z3 model. That is in VioletZ3-Validation.py
+
 NUM_ROBOTS = 1
 NUM_ROOMS = 4
 NUM_HUMANS = 3
