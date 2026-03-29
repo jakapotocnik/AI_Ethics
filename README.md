@@ -6,3 +6,6 @@ The main file to look at is **VioletZ3-Validation.py** - this contains the Z3 ve
 
 
 The file **VioletModel.py** is included as a convenience and is a simulation of the functionality of the model to aid discussion.
+
+
+Video of the VioletModel - ![demo](./RobotVideo.mov)
