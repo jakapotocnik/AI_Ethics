@@ -8,9 +8,6 @@ The main file to look at is **VioletZ3-Validation.py** - this contains the Z3 ve
 The file **VioletModel.py** is included as a convenience and is a simulation of the functionality of the model to aid discussion.
 
 
-Video of the VioletModel - ![demo](./RobotVideo.mov)
+Video of the VioletModel simulation (without z3) [demo](./RobotVideo.mov)
 
-<video controls width="600">
-  <source src="https://raw.githubusercontent.com/jakapotocnik/AI_Ethics/refs/heads/main/RobotVideo.mov" type="video/mp4">
-  
-</video>
+
