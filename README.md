@@ -11,7 +11,7 @@ The file **VioletModel.py** is included as a convenience and is a simulation of 
 Video of the VioletModel simulation (without z3) [demo](./RobotVideo.mov)
 
 Sample output from z3:
-'''
+```
 STEP 1. Timeline (without violations or functional checks)!
 ----------------------------------------------------------
 Result: sat
@@ -164,6 +164,7 @@ room_used(2)           .|.|.|.|.|.|.|1|.|.|.|.|.|.|.|.|.|.|.|.|.|.|.|.|.|.|.|1|.
 
 STEP 3. Timeline (with violations AND with functional checks)!
 -------------------------------------------------------------
-Result: unsat'''
+Result: unsat
 
 Humans never saw UV. Robot didn't halt in doorway - so safe for 50 steps
+```
